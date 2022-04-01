@@ -26,7 +26,7 @@ const addNetwork = (ethereum: any) => {
       nativeCurrency: {
         name: GODWOKEN_V1_NATIVE_CURRENCY_NAME,
         symbol: GODWOKEN_V1_NATIVE_CURRENCY_SYMBOL,
-        decimals: GODWOKEN_V1_NATIVE_CURRENCY_DECIMALS,
+        decimals: Number(GODWOKEN_V1_NATIVE_CURRENCY_DECIMALS),
       },
       rpcUrls: [GODWOKEN_V1_RPC_URL],
       blockExplorerUrls: [GODWOKEN_V1_BLOCK_EXPLORER_URL],
