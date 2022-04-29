@@ -1,5 +1,5 @@
 import { CopyOutlined } from "@ant-design/icons";
-import { Button, Input, Tooltip } from "antd";
+import { Button, Input, message, Tooltip } from "antd";
 import React, { useMemo } from "react";
 import styled from "styled-components";
 import { useLightGodwoken } from "../../hooks/useLightGodwoken";
@@ -27,9 +27,11 @@ export const Address: React.FC = () => {
   if (!lightGodwoken || !l2Address) return null;
   const copyL1Address = () => {
     navigator.clipboard.writeText(lightGodwoken?.provider.getL1Address() || "");
+    message.success("copied L1 address to clipboard");
   };
   const copyL2Address = () => {
     navigator.clipboard.writeText(lightGodwoken?.provider.getL2Address() || "");
+    message.success("copied L2 address to clipboard");
   };
   return (
     <Tooltip
@@ -44,10 +46,6 @@ export const Address: React.FC = () => {
               </Tooltip>
             </Input.Group>
           </div>
-          {/* <div className="text-pair">
-            <Text>L2 CKB Balance</Text>
-            <Text>{getFullDisplayAmount(BigInt(l2CkbBalance), 8)}</Text>
-          </div> */}
           <div className="address-content">
             <label htmlFor="">L1 WALLET ADDRESS</label>
             <Input.Group compact>

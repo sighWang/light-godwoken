@@ -1,12 +1,20 @@
 import { CopyOutlined, LoadingOutlined, PlusOutlined } from "@ant-design/icons";
-import { Script } from "@ckb-lumos/lumos";
-import { Button, Modal, notification, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import { BI } from "@ckb-lumos/lumos";
+import { Button, message, Modal, notification, Typography } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import styled from "styled-components";
 import { useLightGodwoken } from "../hooks/useLightGodwoken";
-import CKBInputPanel from "./CKBInputPanel";
-import CurrencyInputPanel from "./CurrencyInputPanel";
-import Page from "./Page";
+import CKBInputPanel from "../components/Input/CKBInputPanel";
+import CurrencyInputPanel from "../components/Input/CurrencyInputPanel";
+import { getDisplayAmount } from "../utils/formatTokenAmount";
+import { Amount } from "@ckitjs/ckit/dist/helpers";
+import { useSUDTBalance } from "../hooks/useSUDTBalance";
+import { useL1CKBBalance } from "../hooks/useL1CKBBalance";
+import { useL2CKBBalance } from "../hooks/useL2CKBBalance";
+import { SUDT, Token } from "../light-godwoken/lightGodwokenType";
+import { TransactionHistory } from "../components/TransactionHistory";
+import { useL1TxHistory } from "../hooks/useL1TxHistory";
+import { useChainId } from "../hooks/useChainId";
 
 const { Text } = Typography;
 
@@ -26,9 +34,14 @@ const PageHeader = styled.div`
     color: white;
   }
   .title {
-    font-weight: bold;
-    font-size: 20px;
     padding-bottom: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    > span {
+      font-weight: bold;
+      font-size: 20px;
+    }
   }
   .description {
     font-size: 14px;
@@ -44,18 +57,6 @@ const PageMain = styled.div`
     justify-content: center;
     padding-top: 8px;
     padding-bottom: 8px;
-  }
-  .l1-faucet {
-    display: flex;
-    flex-direction: column;
-    padding-top: 20px;
-    .ant-typography {
-      color: white;
-      padding-right: 5px;
-    }
-    a {
-      color: rgb(255, 67, 66);
-    }
   }
 `;
 const L1WalletAddress = styled.div`
@@ -88,7 +89,7 @@ const L1WalletAddress = styled.div`
     }
   }
 `;
-const WithDrawalButton = styled.div`
+const WithdrawalButton = styled.div`
   margin-top: 20px;
   display: flex;
   justify-content: center;
@@ -174,67 +175,144 @@ const ConfirmModal = styled(Modal)`
   }
 `;
 
-interface Token {
-  name: string;
-  symbol: string;
-  decimals: number;
-  tokenURI: string;
-}
+function L2Balance() {
+  const { data: balance } = useL2CKBBalance();
 
-interface SUDT extends Token {
-  type: Script;
+  if (!balance) {
+    return (
+      <span>
+        <LoadingOutlined />
+      </span>
+    );
+  }
+  return <span>L2 Balance: {getDisplayAmount(BI.from(balance), 8)} CKB</span>;
 }
 
 export default function Deposit() {
-  const [ckbInput, setCkbInput] = useState("");
-  const [outputValue, setOutputValue] = useState("");
+  const [CKBInput, setCKBInput] = useState("");
+  const [sudtInput, setSudtInputValue] = useState("");
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [submitButtonDisable, setSubmitButtonDisable] = useState(true);
+  const [isCKBValueValidate, setIsCKBValueValidate] = useState(true);
+  const [isSudtValueValidate, setIsSudtValueValidate] = useState(true);
   const [selectedSudt, setSelectedSudt] = useState<SUDT>();
+  const [selectedSudtBalance, setSelectedSudtBalance] = useState<string>();
   const lightGodwoken = useLightGodwoken();
+  const sudtBalanceQUery = useSUDTBalance();
+  const CKBBalanceQuery = useL1CKBBalance();
+  const CKBBalance = CKBBalanceQuery.data;
+  const maxAmount = CKBBalance ? BI.from(CKBBalance).toString() : undefined;
+  const tokenList: SUDT[] | undefined = lightGodwoken?.getBuiltinSUDTList();
+  const l1Address = lightGodwoken?.provider.getL1Address();
+  const { data: chainId } = useChainId();
+  const { addTxToHistory } = useL1TxHistory(`${chainId}/${l1Address}/deposit`);
 
   const showModal = async () => {
-    setIsModalVisible(true);
     if (lightGodwoken) {
-      const capacity = BigInt(Number(ckbInput) * Math.pow(10, 8));
+      const capacity = Amount.from(CKBInput, 8).toHex();
       let amount = "0x0";
-      if (selectedSudt) {
-        amount = "0x" + BigInt(Number(outputValue) * Math.pow(10, selectedSudt.decimals)).toString(16);
+      if (selectedSudt && sudtInput) {
+        amount = "0x" + Amount.from(sudtInput, selectedSudt.decimals).toString(16);
       }
-      const hash = await lightGodwoken.deposit({
-        capacity: "0x" + capacity.toString(16),
-        amount: amount,
-        sudtType: selectedSudt?.type,
-      });
-      notification.success({ message: `deposit Tx(${hash}) is successful` });
+      setIsModalVisible(true);
+      try {
+        const hash = await lightGodwoken.deposit({
+          capacity: capacity,
+          amount: amount,
+          sudtType: selectedSudt?.type,
+        });
+
+        addTxToHistory({
+          type: "deposit",
+          txHash: hash,
+          capacity,
+          amount,
+          symbol: selectedSudt?.symbol,
+          decimals: selectedSudt?.decimals,
+        });
+        notification.success({ message: `deposit Tx(${hash}) is successful` });
+      } catch (e) {
+        if (e instanceof Error) {
+          if (e.message.startsWith("Not enough CKB:")) {
+            notification.error({
+              message: e.message,
+            });
+          } else if (e.message.startsWith("Not enough SUDT:")) {
+            notification.error({
+              message: e.message,
+            });
+          }
+        }
+      }
       setIsModalVisible(false);
     }
   };
+
+  const inputError = useMemo(() => {
+    if (CKBInput === "") {
+      return "Enter CKB Amount";
+    }
+    if (Amount.from(CKBInput, 8).lt(Amount.from(400, 8))) {
+      return "Minimum 400 CKB";
+    }
+    if (CKBBalance && Amount.from(CKBInput, 8).gt(Amount.from(CKBBalance))) {
+      return "Insufficient CKB Amount";
+    }
+    if (
+      sudtInput &&
+      selectedSudtBalance &&
+      Amount.from(sudtInput, selectedSudt?.decimals).gt(Amount.from(selectedSudtBalance))
+    ) {
+      return `Insufficient ${selectedSudt?.symbol} Amount`;
+    }
+    return void 0;
+  }, [CKBInput, CKBBalance, sudtInput, selectedSudtBalance, selectedSudt?.decimals, selectedSudt?.symbol]);
 
   const handleCancel = () => {
     setIsModalVisible(false);
   };
 
   useEffect(() => {
-    if (Number(ckbInput) >= 400) {
-      setSubmitButtonDisable(false);
+    if (CKBInput === "" || CKBBalance === undefined) {
+      setIsCKBValueValidate(false);
+    } else if (
+      Amount.from(CKBInput, 8).gte(Amount.from(400, 8)) &&
+      Amount.from(CKBInput, 8).lte(Amount.from(CKBBalance))
+    ) {
+      setIsCKBValueValidate(true);
     } else {
-      setSubmitButtonDisable(true);
+      setIsCKBValueValidate(false);
     }
-  }, [ckbInput]);
+  }, [CKBBalance, CKBInput]);
 
-  const handleSelectedChange = (value: Token) => {
+  useEffect(() => {
+    if (
+      sudtInput &&
+      selectedSudtBalance &&
+      Amount.from(sudtInput, selectedSudt?.decimals).gt(Amount.from(selectedSudtBalance))
+    ) {
+      setIsSudtValueValidate(false);
+    } else {
+      setIsSudtValueValidate(true);
+    }
+  }, [sudtInput, selectedSudtBalance, selectedSudt?.decimals]);
+
+  const handleSelectedChange = (value: Token, balance: string) => {
     setSelectedSudt(value as SUDT);
+    setSelectedSudtBalance(balance);
   };
 
   const copyAddress = () => {
     navigator.clipboard.writeText(lightGodwoken?.provider.getL1Address() || "");
+    message.success("copied L1 address to clipboard");
   };
   return (
-    <Page>
+    <>
       <PageContent>
         <PageHeader className="header">
-          <Text className="title">Deposit To Layer2</Text>
+          <Text className="title">
+            <span>Deposit To Layer2</span>
+            <TransactionHistory type="deposit"></TransactionHistory>
+          </Text>
           <Text className="description">
             To deposit, transfer CKB or supported sUDT tokens to your L1 Wallet Address first
           </Text>
@@ -248,30 +326,39 @@ export default function Deposit() {
           </div>
         </L1WalletAddress>
         <PageMain className="main">
-          <CKBInputPanel value={ckbInput} onUserInput={setCkbInput} label="Deposit" isL1></CKBInputPanel>
+          <CKBInputPanel
+            value={CKBInput}
+            onUserInput={setCKBInput}
+            label="Deposit"
+            isLoading={CKBBalanceQuery.isLoading}
+            CKBBalance={CKBBalance}
+            maxAmount={maxAmount}
+          ></CKBInputPanel>
           <div className="icon">
             <PlusOutlined />
           </div>
           <CurrencyInputPanel
-            value={outputValue}
-            onUserInput={setOutputValue}
+            value={sudtInput}
+            onUserInput={setSudtInputValue}
             label="sUDT(optional)"
             onSelectedChange={handleSelectedChange}
-            isL1
+            balancesList={sudtBalanceQUery.data?.balances}
+            tokenList={tokenList}
+            dataLoading={sudtBalanceQUery.isLoading}
           ></CurrencyInputPanel>
-          <WithDrawalButton>
-            <Button className="submit-button" disabled={submitButtonDisable} onClick={showModal}>
-              Deposit
+          <WithdrawalButton>
+            <Button
+              className="submit-button"
+              disabled={!CKBInput || !isCKBValueValidate || !isSudtValueValidate}
+              onClick={showModal}
+            >
+              {inputError || "Deposit"}
             </Button>
-          </WithDrawalButton>
-          <div className="l1-faucet">
-            <Text>Need Layer 1 test tokens?</Text>
-            <a href="https://faucet.nervos.org/" target="_blank" rel="noreferrer">
-              CKB Testnet Faucet
-            </a>
+          </WithdrawalButton>
+          <div>
+            <L2Balance />
           </div>
         </PageMain>
-        <div className="footer"></div>
       </PageContent>
       <ConfirmModal title="Confirm Transaction" visible={isModalVisible} onCancel={handleCancel} footer={null}>
         <div className="icon-container">
@@ -279,10 +366,10 @@ export default function Deposit() {
         </div>
         <Text>Waiting For Confirmation</Text>
         <Text>
-          Depositing {outputValue} {selectedSudt?.symbol} and {ckbInput} CKB
+          Depositing {sudtInput} {selectedSudt?.symbol} and {CKBInput} CKB
         </Text>
         <div className="tips">Confirm this transaction in your wallet</div>
       </ConfirmModal>
-    </Page>
+    </>
   );
 }

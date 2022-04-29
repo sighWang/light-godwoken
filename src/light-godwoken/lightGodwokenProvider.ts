@@ -1,4 +1,4 @@
-import { SCRIPTS } from "./constants/index";
+import { LightGodwokenConfig, predefined as predefinedLightGodwokenConfig } from "./constants/lightGodwokenConfig";
 import {
   Address,
   Indexer,
@@ -14,69 +14,63 @@ import {
   Cell,
   HashType,
   Script,
-  CellDep,
+  BI,
+  Hexadecimal,
 } from "@ckb-lumos/lumos";
 import { core as godwokenCore } from "@polyjuice-provider/godwoken";
-import { ROLLUP_CONFIG } from "./constants";
-import { PROVIDER_CONFIG } from "./constants/providerConfig";
 import { PolyjuiceHttpProvider } from "@polyjuice-provider/web3";
 import { SUDT_ERC20_PROXY_ABI } from "./constants/sudtErc20ProxyAbi";
-import { AbiItems, PolyjuiceConfig } from "@polyjuice-provider/base";
-import { GodwokenClient } from "./godwoken/godwoken";
+import { AbiItems } from "@polyjuice-provider/base";
 import Web3 from "web3";
-import { LightGodwokenProvider } from "./lightGodwokenType";
-import { WithdrawalRequest } from "./godwoken/normalizer";
+import { GodwokenVersion, LightGodwokenProvider } from "./lightGodwokenType";
 import { SerializeRcLockWitnessLock } from "./omni-lock/index";
-import { TransactionWithStatus } from "@ckb-lumos/base";
-
-export const POLYJUICE_CONFIG = {
-  web3Url: PROVIDER_CONFIG.LINA.GW_POLYJUICE_RPC_URL,
-  abiItems: SUDT_ERC20_PROXY_ABI as AbiItems,
-};
-
-export const polyjuiceProvider = new PolyjuiceHttpProvider(
-  POLYJUICE_CONFIG.web3Url,
-  POLYJUICE_CONFIG as PolyjuiceConfig,
-);
+import { debug } from "./debug";
 
 export default class DefaultLightGodwokenProvider implements LightGodwokenProvider {
   l2Address: Address = "";
   l1Address: Address = "";
   ckbIndexer;
-  rpc;
+  ckbRpc;
   ethereum;
   web3;
-  godwokenClient;
-
-  constructor(ethAddress: Address, ethereum: any, env = "AGGRON") {
-    if (env === "AGGRON") {
-      config.initializeConfig(config.predefined.AGGRON4);
-      this.ckbIndexer = new Indexer(PROVIDER_CONFIG.AGGRON.CKB_INDEXER_URL, PROVIDER_CONFIG.AGGRON.CKB_RPC_URL);
-      this.rpc = new RPC(PROVIDER_CONFIG.AGGRON.CKB_RPC_URL);
-      this.godwokenClient = new GodwokenClient(PROVIDER_CONFIG.LINA.GW_POLYJUICE_RPC_URL);
-    } else if (env === "LINA") {
-      config.initializeConfig(config.predefined.LINA);
-      this.ckbIndexer = new Indexer(PROVIDER_CONFIG.LINA.CKB_INDEXER_URL, PROVIDER_CONFIG.LINA.CKB_RPC_URL);
-      this.rpc = new RPC(PROVIDER_CONFIG.LINA.CKB_RPC_URL);
-      this.godwokenClient = new GodwokenClient(PROVIDER_CONFIG.LINA.GW_POLYJUICE_RPC_URL);
-    } else {
-      throw new Error("env not defined, please use AGGRON or LINA.");
+  lightGodwokenConfig;
+  constructor(ethAddress: Address, ethereum: any, env: GodwokenVersion, lightGodwokenConfig?: LightGodwokenConfig) {
+    if (lightGodwokenConfig) {
+      validateLightGodwokenConfig(lightGodwokenConfig);
     }
+    config.initializeConfig(config.predefined.AGGRON4);
+    this.lightGodwokenConfig = lightGodwokenConfig || predefinedLightGodwokenConfig[env];
+
+    debug("lightGodwokenConfig", lightGodwokenConfig);
+    const { layer1Config, layer2Config } = this.lightGodwokenConfig;
+    this.ckbIndexer = new Indexer(layer1Config.CKB_INDEXER_URL, layer1Config.CKB_RPC_URL);
+    this.ckbRpc = new RPC(layer1Config.CKB_RPC_URL);
+
+    if (env === "v0") {
+      const polyjuiceProvider = new PolyjuiceHttpProvider(layer2Config.GW_POLYJUICE_RPC_URL, {
+        web3Url: layer2Config.GW_POLYJUICE_RPC_URL,
+        abiItems: SUDT_ERC20_PROXY_ABI as AbiItems,
+      });
+      this.web3 = new Web3(polyjuiceProvider);
+    } else if (env === "v1") {
+      this.web3 = new Web3(ethereum || (window.ethereum as any));
+    } else {
+      throw new Error("unsupported env");
+    }
+
     this.ethereum = ethereum;
     this.l2Address = ethAddress;
     this.l1Address = this.generateL1Address(this.l2Address);
     ethereum.on("accountsChanged", (accounts: any) => {
-      console.log("eth accounts changed", accounts);
+      debug("eth accounts changed", accounts);
       this.l2Address = accounts[0];
       this.l1Address = this.generateL1Address(this.l2Address);
     });
-
-    this.web3 = new Web3(polyjuiceProvider);
   }
 
-  async sendWithdrawTransaction(withdrawalRequest: WithdrawalRequest): Promise<string> {
-    const result = await this.godwokenClient.submitWithdrawalRequest(withdrawalRequest);
-    return result as unknown as string;
+  async getMinFeeRate(): Promise<BI> {
+    const feeRate = await this.ckbRpc.tx_pool_info();
+    return BI.from(feeRate.min_fee_rate);
   }
 
   getL2Address(): string {
@@ -86,20 +80,37 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     return this.l1Address;
   }
 
-  static async CreateProvider(ethereum: any): Promise<LightGodwokenProvider> {
+  async getL1CkbBalance(): Promise<BI> {
+    const ckbCollector = this.ckbIndexer.collector({
+      lock: helpers.parseAddress(this.l1Address),
+      type: "empty",
+      outputDataLenRange: ["0x0", "0x1"],
+    });
+    let ckbBalance = BI.from(0);
+    for await (const cell of ckbCollector.collect()) {
+      ckbBalance = ckbBalance.add(cell.cell_output.capacity);
+    }
+    return ckbBalance;
+  }
+
+  getLightGodwokenConfig(): LightGodwokenConfig {
+    return this.lightGodwokenConfig;
+  }
+
+  static async CreateProvider(ethereum: any, version: GodwokenVersion): Promise<LightGodwokenProvider> {
     if (!ethereum || !ethereum.isMetaMask) {
       throw new Error("please provide metamask ethereum object");
     }
     return ethereum
       .request({ method: "eth_requestAccounts" })
       .then((accounts: any) => {
-        console.log("eth_requestAccounts", accounts);
-        return new DefaultLightGodwokenProvider(accounts[0], ethereum);
+        debug("eth_requestAccounts", accounts);
+        return new DefaultLightGodwokenProvider(accounts[0], ethereum, version);
       })
       .catch((error: any) => {
         if (error.code === 4001) {
           // EIP-1193 userRejectedRequest error
-          console.log("Please connect to MetaMask.");
+          debug("Please connect to MetaMask.");
         } else {
           console.error(error);
         }
@@ -108,8 +119,8 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
 
   generateL1Address(l2Address: Address): Address {
     const omniLock: Script = {
-      code_hash: SCRIPTS.omni_lock.code_hash,
-      hash_type: SCRIPTS.omni_lock.hash_type as HashType,
+      code_hash: this.lightGodwokenConfig.layer1Config.SCRIPTS.omni_lock.code_hash,
+      hash_type: this.lightGodwokenConfig.layer1Config.SCRIPTS.omni_lock.hash_type as HashType,
       // omni flag       pubkey hash   omni lock flags
       // chain identity   eth addr      function flag()
       // 00: Nervos       👇            00: owner
@@ -120,23 +131,26 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     return helpers.generateAddress(omniLock);
   }
 
-  // // TODO the unknown is godwoken submit_withdrawal_tx
-  // sendWithdrawTransaction: (tx: unknown) => Promise<Hash>;
-
   // // now only supported omni lock, the other lock type will be supported later
   async sendL1Transaction(tx: Transaction): Promise<Hash> {
-    return await this.rpc.send_transaction(tx, "passthrough");
+    return await this.ckbRpc.send_transaction(tx, "passthrough");
   }
 
-  async signL1Transaction(txSkeleton: helpers.TransactionSkeletonType): Promise<Transaction> {
+  async signL1Transaction(txSkeleton: helpers.TransactionSkeletonType, dummySign = false): Promise<Transaction> {
     const message = this.generateMessage(txSkeleton);
-    let signedMessage = await this.ethereum.request({
-      method: "personal_sign",
-      params: [this.ethereum.selectedAddress, message],
-    });
+    debug("message before sign", message);
+    let signedMessage = `0x${"00".repeat(65)}`;
+
+    if (!dummySign) {
+      signedMessage = await this.ethereum.request({
+        method: "personal_sign",
+        params: [this.ethereum.selectedAddress, message],
+      });
+    }
     let v = Number.parseInt(signedMessage.slice(-2), 16);
     if (v >= 27) v -= 27;
     signedMessage = "0x" + signedMessage.slice(2, -2) + v.toString(16).padStart(2, "0");
+    debug("message after sign", signedMessage);
     const signedWitness = new toolkit.Reader(
       core.SerializeWitnessArgs({
         lock: SerializeRcLockWitnessLock({
@@ -146,6 +160,17 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     ).serializeJson();
     txSkeleton = txSkeleton.update("witnesses", (witnesses) => witnesses.push(`${signedWitness}`));
     const signedTx = helpers.createTransactionFromSkeleton(txSkeleton);
+    let inputCapacity = txSkeleton.inputs.reduce(
+      (acc, input) => acc.add(BI.from(input.cell_output.capacity)),
+      BI.from(0),
+    );
+    let outputCapacity = txSkeleton.outputs.reduce(
+      (acc, input) => acc.add(BI.from(input.cell_output.capacity)),
+      BI.from(0),
+    );
+    debug("inputCapacity", inputCapacity.toString());
+    debug("outputCapacity", outputCapacity.toString());
+    debug("payed fee", outputCapacity.sub(inputCapacity).toString());
     return signedTx;
   }
 
@@ -179,47 +204,13 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     hasher.update(witness);
   }
 
-  async getPendingTransaction(txHash: Hash): Promise<TransactionWithStatus | null> {
-    let tx: TransactionWithStatus | null = null;
-
-    // retry 10 times, and sleep 1s
-    for (let i = 0; i < 10; i++) {
-      tx = await this.rpc.get_transaction(txHash);
-      if (tx != null) {
-        return tx;
-      }
-      await this.asyncSleep(1000);
-    }
-    return null;
-  }
-
-  async getRollupCellDep(): Promise<CellDep> {
-    const result = await this.godwokenClient.getLastSubmittedInfo();
-    const txHash = result.transaction_hash;
-    const tx = await this.getPendingTransaction(txHash);
-
-    if (tx == null) {
-      throw new Error("Last submitted tx not found!");
-    }
-
-    let rollupIndex = tx.transaction.outputs.findIndex((o: any) => {
-      return o.type && utils.computeScriptHash(o.type) === ROLLUP_CONFIG.rollup_type_hash;
-    });
-    return {
-      out_point: {
-        tx_hash: txHash,
-        index: `0x${rollupIndex.toString(16)}`,
-      },
-      dep_type: "code",
-    };
-  }
-
   async getRollupCell(): Promise<Cell | undefined> {
+    const rollupConfig = this.lightGodwokenConfig.layer2Config.ROLLUP_CONFIG;
     const queryOptions = {
       type: {
-        code_hash: ROLLUP_CONFIG.rollup_type_script.code_hash as Hash,
-        hash_type: ROLLUP_CONFIG.rollup_type_script.hash_type as HashType,
-        args: ROLLUP_CONFIG.rollup_type_script.args as HexString,
+        code_hash: rollupConfig.rollup_type_script.code_hash,
+        hash_type: rollupConfig.rollup_type_script.hash_type,
+        args: rollupConfig.rollup_type_script.args,
       },
     };
     const collector = this.ckbIndexer.collector(queryOptions);
@@ -235,6 +226,38 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     return rollupCell;
   }
 
+  getLayer2LockScript(): Script {
+    const layer2Lock: Script = {
+      code_hash: this.lightGodwokenConfig.layer2Config.SCRIPTS.eth_account_lock.script_type_hash as string,
+      hash_type: "type",
+      args:
+        this.lightGodwokenConfig.layer2Config.ROLLUP_CONFIG.rollup_type_hash + this.l2Address.slice(2).toLowerCase(),
+    };
+    return layer2Lock;
+  }
+
+  getLayer2LockScriptHash(): Hash {
+    const accountScriptHash = utils.computeScriptHash(this.getLayer2LockScript());
+    debug("accountScriptHash", accountScriptHash);
+    return accountScriptHash;
+  }
+
+  getLayer1Lock(): Script {
+    return helpers.parseAddress(this.l1Address);
+  }
+
+  getLayer1LockScriptHash(): Hash {
+    const ownerCKBLock = helpers.parseAddress(this.l1Address);
+    const ownerLock: Script = {
+      code_hash: ownerCKBLock.code_hash,
+      args: ownerCKBLock.args,
+      hash_type: ownerCKBLock.hash_type as HashType,
+    };
+    const ownerLockHash = utils.computeScriptHash(ownerLock);
+    debug("ownerLockHash", ownerLockHash);
+    return ownerLockHash;
+  }
+
   async getLastFinalizedBlockNumber(): Promise<number> {
     const rollupCell = await this.getRollupCell();
     if (!rollupCell === undefined) {
@@ -242,11 +265,28 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     }
     const globalState = new godwokenCore.GlobalState(new toolkit.Reader(rollupCell!.data));
     const lastFinalizedBlockNumber = Number(globalState.getLastFinalizedBlockNumber().toLittleEndianBigUint64());
-    console.log("last finalized block number: ", lastFinalizedBlockNumber);
+    debug("last finalized block number: ", lastFinalizedBlockNumber);
     return lastFinalizedBlockNumber;
   }
 
   async asyncSleep(ms = 0) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+}
+function validateLightGodwokenConfig(
+  lightGodwokenConfig: LightGodwokenConfig,
+): asserts lightGodwokenConfig is LightGodwokenConfig {
+  if (
+    !lightGodwokenConfig ||
+    !lightGodwokenConfig.layer2Config ||
+    !lightGodwokenConfig.layer2Config.SCRIPTS ||
+    !lightGodwokenConfig.layer2Config.ROLLUP_CONFIG ||
+    !lightGodwokenConfig.layer2Config.GW_POLYJUICE_RPC_URL ||
+    !lightGodwokenConfig.layer1Config ||
+    !lightGodwokenConfig.layer1Config.SCRIPTS ||
+    !lightGodwokenConfig.layer1Config.CKB_INDEXER_URL ||
+    !lightGodwokenConfig.layer1Config.CKB_RPC_URL
+  ) {
+    throw new Error("lightGodwokenConfig not valid.");
   }
 }

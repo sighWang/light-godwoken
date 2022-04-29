@@ -1,5 +1,4 @@
-import { Address, Cell, Hash, HexNumber, Transaction, helpers, Script } from "@ckb-lumos/lumos";
-import { WithdrawalRequest } from "./godwoken/normalizer";
+import { Address, Cell, Hash, HexNumber, Transaction, helpers, Script, BI } from "@ckb-lumos/lumos";
 
 export interface GetL2CkbBalancePayload {
   l2Address?: string;
@@ -8,7 +7,7 @@ export interface GetL2CkbBalancePayload {
 export interface GetL1CkbBalancePayload {
   l1Address?: string;
 }
-interface Token {
+export interface Token {
   name: string;
   symbol: string;
   decimals: number;
@@ -41,12 +40,17 @@ export interface GetSudtBalances {
   types: Script[];
 }
 
+export interface GodwokenNetworkConfig {
+  testnetV1: "https://godwoken-testnet-web3-v1-rpc.ckbapp.dev";
+}
+
 interface WithdrawListener {
   (event: "sending", listener: () => void): void;
   (event: "sent", listener: (txHash: Hash) => void): void;
   (event: "pending", listener: (txHash: Hash) => void): void;
   (event: "success", listener: (txHash: Hash) => void): void;
   (event: "error", listener: (e: Error) => void): void;
+  (event: "fail", listener: (e: Error) => void): void;
 }
 
 export interface WithdrawalEventEmitter {
@@ -96,13 +100,14 @@ export interface DepositPayload {
 
 type Promisable<T> = Promise<T> | T;
 
+export const CKB_SUDT_ID = 1;
+
 export interface LightGodwokenProvider {
   getL2Address(): Promisable<string>;
 
   getL1Address(): Promisable<string>;
 
-  // TODO the unknown is godwoken submit_withdrawal_tx
-  sendWithdrawTransaction: (withdrawalRequest: WithdrawalRequest) => Promise<Hash>;
+  getMinFeeRate(): Promise<BI>;
 
   signL1Transaction: (tx: helpers.TransactionSkeletonType) => Promise<Transaction>;
 
@@ -110,19 +115,23 @@ export interface LightGodwokenProvider {
   sendL1Transaction: (tx: Transaction) => Promise<Hash>;
 }
 
-export interface LightGodwoken {
+export type GodwokenVersion = "v0" | "v1";
+
+export interface LightGodwokenBase {
   provider: LightGodwokenProvider;
+
+  getVersion: () => GodwokenVersion;
+
+  getChainId: () => Promise<HexNumber> | HexNumber;
 
   /**
    * get producing 1 block time
    */
   getBlockProduceTime: () => Promise<number> | number;
 
-  unlock: (payload: UnlockPayload) => Promise<Hash>;
-
   listWithdraw: () => Promise<WithdrawResult[]>;
 
-  deposit?: (payload: DepositPayload) => Promise<Hash>;
+  deposit: (payload: DepositPayload) => Promise<Hash>;
 
   withdrawWithEvent: (payload: WithdrawalEventEmitterPayload) => WithdrawalEventEmitter;
 
@@ -138,3 +147,8 @@ export interface LightGodwoken {
 
   getSudtBalances: (payload: GetSudtBalances) => Promise<GetSudtBalancesResult>;
 }
+
+export interface LightGodwokenV0 extends LightGodwokenBase {
+  unlock: (payload: UnlockPayload) => Promise<Hash>;
+}
+export interface LightGodwokenV1 extends LightGodwokenBase {}
