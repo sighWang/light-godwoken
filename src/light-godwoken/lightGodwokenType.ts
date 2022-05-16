@@ -1,4 +1,5 @@
-import { Address, Cell, Hash, HexNumber, Transaction, helpers, Script, BI } from "@ckb-lumos/lumos";
+import { Address, Cell, Hash, HexNumber, Transaction, helpers, Script, BI, HexString } from "@ckb-lumos/lumos";
+import { LightGodwokenConfig } from "./constants/configTypes";
 
 export interface GetL2CkbBalancePayload {
   l2Address?: string;
@@ -57,7 +58,7 @@ export interface WithdrawalEventEmitter {
   on: WithdrawListener;
 }
 
-export interface WithdrawalEventEmitterPayload {
+export interface BaseWithdrawalEventEmitterPayload {
   // CKB capacity
   capacity: HexNumber;
   // L1 mapped sUDT amount
@@ -66,7 +67,8 @@ export interface WithdrawalEventEmitterPayload {
    * {@link L1MappedErc20}
    */
   sudt_script_hash: Hash;
-
+}
+export interface WithdrawalEventEmitterPayload extends BaseWithdrawalEventEmitterPayload {
   /**
    * withdraw to L1 address
    */
@@ -103,7 +105,11 @@ type Promisable<T> = Promise<T> | T;
 export const CKB_SUDT_ID = 1;
 
 export interface LightGodwokenProvider {
+  claimUSDC(): Promise<HexString>;
+
   getL2Address(): Promisable<string>;
+
+  getConfig(): LightGodwokenConfig;
 
   getL1Address(): Promisable<string>;
 
@@ -120,7 +126,13 @@ export type GodwokenVersion = "v0" | "v1";
 export interface LightGodwokenBase {
   provider: LightGodwokenProvider;
 
+  getConfig(): LightGodwokenConfig;
+
+  claimUSDC(): Promise<HexString>;
+
   getVersion: () => GodwokenVersion;
+
+  getNativeAsset: () => Token;
 
   getChainId: () => Promise<HexNumber> | HexNumber;
 
@@ -129,7 +141,11 @@ export interface LightGodwokenBase {
    */
   getBlockProduceTime: () => Promise<number> | number;
 
+  getWithdrawalWaitBlock: () => Promise<number> | number;
+
   listWithdraw: () => Promise<WithdrawResult[]>;
+
+  generateDepositLock: () => Script;
 
   deposit: (payload: DepositPayload) => Promise<Hash>;
 
@@ -150,5 +166,6 @@ export interface LightGodwokenBase {
 
 export interface LightGodwokenV0 extends LightGodwokenBase {
   unlock: (payload: UnlockPayload) => Promise<Hash>;
+  withdrawToV1WithEvent: (payload: BaseWithdrawalEventEmitterPayload) => WithdrawalEventEmitter;
 }
 export interface LightGodwokenV1 extends LightGodwokenBase {}

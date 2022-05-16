@@ -6,7 +6,6 @@ import { useLightGodwoken } from "../hooks/useLightGodwoken";
 import WithdrawalV1 from "./withdrawal/WithdrawalV1";
 import { LightGodwokenV1 } from "../light-godwoken";
 import { addNetwork } from "../utils/addNetwork";
-import { useChainId } from "../hooks/useChainId";
 
 interface Props {
   activeView?: string;
@@ -18,9 +17,8 @@ export default function LightGodwokenApp(props: Props) {
     setActiveView(props.activeView || "deposit");
   }, [props.activeView]);
   const lightGodwoken = useLightGodwoken();
-  const { data: chainId } = useChainId();
-  if (lightGodwoken instanceof LightGodwokenV1 && chainId) {
-    addNetwork(lightGodwoken.provider.ethereum, chainId);
+  if (lightGodwoken instanceof LightGodwokenV1) {
+    addNetwork(lightGodwoken.provider.ethereum, lightGodwoken);
   }
 
   const WithdrawalComp = lightGodwoken?.getVersion().toString() === "v0" ? Withdrawal : WithdrawalV1;

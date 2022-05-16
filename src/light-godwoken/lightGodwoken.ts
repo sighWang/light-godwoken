@@ -13,13 +13,7 @@ import {
 } from "@ckb-lumos/lumos";
 import * as secp256k1 from "secp256k1";
 import { getCellDep } from "./constants/configUtils";
-import {
-  NormalizeDepositLockArgs,
-  NormalizeRawWithdrawalRequest,
-  NormalizeWithdrawalLockArgs,
-  RawWithdrawalRequest,
-  WithdrawalLockArgs,
-} from "./godwoken/normalizer";
+import { NormalizeWithdrawalLockArgs, WithdrawalLockArgs } from "./godwoken/normalizer";
 import LightGodwokenProvider from "./lightGodwokenProvider";
 import {
   DepositPayload,
@@ -36,13 +30,11 @@ import {
   WithdrawResult,
   GodwokenVersion,
   LightGodwokenBase,
+  Token,
 } from "./lightGodwokenType";
-import {
-  SerializeDepositLockArgs,
-  SerializeRawWithdrawalRequest,
-  SerializeWithdrawalLockArgs,
-} from "./schemas/index.esm";
-import { debug } from "./debug";
+import { SerializeWithdrawalLockArgs } from "./schemas/generated/index.esm";
+import { debug, debugProductionEnv } from "./debug";
+import { LightGodwokenConfig } from "./constants/configTypes";
 
 export default abstract class DefaultLightGodwoken implements LightGodwokenBase {
   provider: LightGodwokenProvider;
@@ -50,15 +42,26 @@ export default abstract class DefaultLightGodwoken implements LightGodwokenBase 
     this.provider = provider;
   }
 
+  abstract generateDepositLock(): Script;
+  abstract getNativeAsset(): Token;
   abstract getChainId(): string | Promise<string>;
   abstract getL2CkbBalance(payload?: GetL2CkbBalancePayload | undefined): Promise<string>;
   abstract getErc20Balances(payload: GetErc20Balances): Promise<GetErc20BalancesResult>;
   abstract getBlockProduceTime(): number | Promise<number>;
+  abstract getWithdrawalWaitBlock(): number | Promise<number>;
   abstract getBuiltinErc20List(): ProxyERC20[];
   abstract getBuiltinSUDTList(): SUDT[];
   abstract listWithdraw(): Promise<WithdrawResult[]>;
   abstract getVersion(): GodwokenVersion;
   abstract withdrawWithEvent(payload: WithdrawalEventEmitterPayload): WithdrawalEventEmitter;
+
+  getConfig(): LightGodwokenConfig {
+    return this.provider.getConfig();
+  }
+
+  async claimUSDC(): Promise<HexString> {
+    return this.provider.claimUSDC();
+  }
 
   async generateDepositTx(payload: DepositPayload): Promise<helpers.TransactionSkeletonType> {
     let neededCapacity = BI.from(payload.capacity);
@@ -143,6 +146,7 @@ export default abstract class DefaultLightGodwoken implements LightGodwokenBase 
     txSkeleton = await this.payTxFee(txSkeleton);
     let signedTx = await this.provider.signL1Transaction(txSkeleton);
     const txHash = await this.provider.sendL1Transaction(signedTx);
+    debugProductionEnv(`Deposit ${txHash}`);
     return txHash;
   }
 
@@ -237,29 +241,6 @@ export default abstract class DefaultLightGodwoken implements LightGodwokenBase 
       return outputCells;
     }
   }
-  generateDepositLock(): Script {
-    const ownerLock: Script = helpers.parseAddress(this.provider.l1Address);
-    const ownerLockHash: Hash = utils.computeScriptHash(ownerLock);
-    const layer2Lock: Script = this.provider.getLayer2LockScript();
-
-    const depositLockArgs = {
-      owner_lock_hash: ownerLockHash,
-      layer2_lock: layer2Lock,
-      cancel_timeout: "0xc0000000000004b0",
-    };
-    const depositLockArgsHexString: HexString = new toolkit.Reader(
-      SerializeDepositLockArgs(NormalizeDepositLockArgs(depositLockArgs)),
-    ).serializeJson();
-
-    const { SCRIPTS, ROLLUP_CONFIG } = this.provider.getLightGodwokenConfig().layer2Config;
-
-    const depositLock: Script = {
-      code_hash: SCRIPTS.deposit_lock.script_type_hash,
-      hash_type: "type",
-      args: ROLLUP_CONFIG.rollup_type_hash + depositLockArgsHexString.slice(2),
-    };
-    return depositLock;
-  }
 
   async signMessageMetamaskPersonalSign(message: Hash): Promise<HexString> {
     let signedMessage = await this.provider.ethereum.request({
@@ -301,10 +282,7 @@ export default abstract class DefaultLightGodwoken implements LightGodwokenBase 
     return signature;
   }
 
-  generateWithdrawalMessageToSign(rawWithdrawalRequest: RawWithdrawalRequest, rollupTypeHash: Hash): Hash {
-    const serializedRawWithdrawalRequest: HexString = new toolkit.Reader(
-      SerializeRawWithdrawalRequest(NormalizeRawWithdrawalRequest(rawWithdrawalRequest)),
-    ).serializeJson();
+  generateWithdrawalMessageToSign(serializedRawWithdrawalRequest: HexString, rollupTypeHash: Hash): Hash {
     const data = new toolkit.Reader(rollupTypeHash + serializedRawWithdrawalRequest.slice(2)).toArrayBuffer();
     const message = utils.ckbHash(data).serializeJson();
     return message;
