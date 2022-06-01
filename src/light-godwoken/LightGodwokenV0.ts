@@ -9,13 +9,12 @@ import {
   helpers,
   HexNumber,
   HexString,
-  Output,
   Script,
   toolkit,
   utils,
   WitnessArgs,
 } from "@ckb-lumos/lumos";
-import { Hexadecimal, TransactionWithStatus } from "@ckb-lumos/base";
+import { Hexadecimal } from "@ckb-lumos/base";
 import EventEmitter from "events";
 import DefaultLightGodwoken from "./lightGodwoken";
 import {
@@ -33,18 +32,25 @@ import {
   BaseWithdrawalEventEmitterPayload,
   Token,
 } from "./lightGodwokenType";
-import { SerializeDepositLockArgs, SerializeUnlockWithdrawalViaFinalize } from "./schemas/generated/index.esm";
 import { getTokenList } from "./constants/tokens";
 import { AbiItems } from "@polyjuice-provider/base";
 import { SUDT_ERC20_PROXY_ABI } from "./constants/sudtErc20ProxyAbi";
 import { getCellDep } from "./constants/configUtils";
-import { GodwokenClient } from "./godwoken/godwoken";
+import { GodwokenClient } from "./godwoken/godwokenV0";
 import LightGodwokenProvider from "./lightGodwokenProvider";
 import DefaultLightGodwokenProvider from "./lightGodwokenProvider";
-import { RawWithdrwal, RawWithdrwalCodec, WithdrawalRequestExtraCodec } from "./schemas/codec";
+import { RawWithdrwal, RawWithdrwalCodec, WithdrawalRequestExtraCodec, V0DepositLockArgs } from "./schemas/codecV0";
 import { debug, debugProductionEnv } from "./debug";
-import { NormalizeDepositLockArgs } from "./godwoken/normalizer";
 import DefaultLightGodwokenV1 from "./LightGodwokenV1";
+import {
+  Erc20NotFoundError,
+  EthAddressFormatError,
+  Layer2AccountIdNotFoundError,
+  Layer2RpcError,
+  NotEnoughCapacityError,
+  NotEnoughSudtError,
+  TransactionSignError,
+} from "./constants/error";
 export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken implements LightGodwokenV0 {
   godwokenClient;
   constructor(provider: LightGodwokenProvider) {
@@ -109,7 +115,7 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
       return item.sudt_script_hash === sudtTypeHash;
     });
     if (filterd.length === 0) {
-      throw new Error(`Builtin erc20 not found with sudtTypeHash: ${sudtTypeHash}`);
+      throw new Erc20NotFoundError(sudtTypeHash, `Builtin erc20 not found with sudtTypeHash: ${sudtTypeHash}`);
     }
     return filterd[0];
   }
@@ -216,7 +222,7 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
 
   getWithdrawalCellSearchParams(ethAddress: string) {
     if (ethAddress.length !== 42 || !ethAddress.startsWith("0x")) {
-      throw new Error("eth address format error!");
+      throw new EthAddressFormatError({ address: ethAddress }, "eth address format error!");
     }
     const accountScriptHash = this.provider.getLayer2LockScriptHash();
     const { layer2Config } = this.provider.getLightGodwokenConfig();
@@ -274,7 +280,14 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
       layer2Config.ROLLUP_CONFIG.rollup_type_hash,
     );
     debug("message:", message);
-    const signatureMetamaskPersonalSign: HexString = await this.signMessageMetamaskPersonalSign(message);
+    let signatureMetamaskPersonalSign: HexString = "";
+    try {
+      signatureMetamaskPersonalSign = await this.signMessageMetamaskPersonalSign(message);
+    } catch (e) {
+      const error = new TransactionSignError(message, (e as Error).message);
+      eventEmitter.emit("error", error);
+      throw error;
+    }
     debug("signatureMetamaskPersonalSign:", signatureMetamaskPersonalSign);
     const withdrawalRequest = {
       raw: rawWithdrawalRequest,
@@ -289,13 +302,13 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
 
     debug("withdrawalRequestExtra:", withdrawalRequestExtra);
     // using RPC `submitWithdrawalRequest` to submit withdrawal request to godwoken
-    let txHash: unknown;
+    let txHash: HexString = "";
     try {
-      txHash = await this.godwokenClient.submitWithdrawalRequest(
+      txHash = (await this.godwokenClient.submitWithdrawalRequest(
         new toolkit.Reader(WithdrawalRequestExtraCodec.pack(withdrawalRequestExtra)).serializeJson(),
-      );
-    } catch (e) {
-      eventEmitter.emit("error", e);
+      )) as unknown as HexString;
+    } catch (e: any) {
+      eventEmitter.emit("error", new Layer2RpcError(txHash, e.message));
       return;
     }
     eventEmitter.emit("sent", txHash);
@@ -343,7 +356,7 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
     const fromId = await this.godwokenClient.getAccountIdByScriptHash(accountScriptHash);
     debug("fromId:", fromId);
     if (!fromId) {
-      throw new Error("account not found");
+      throw new Layer2AccountIdNotFoundError(accountScriptHash, "account not found");
     }
     let account_script_hash = await this.godwokenClient.getScriptHash(fromId);
     debug("account_script_hash:", account_script_hash);
@@ -354,11 +367,15 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
     );
     const minCapacity = this.minimalWithdrawalCapacity(isSudt);
     if (BI.from(payload.capacity).lt(minCapacity)) {
-      throw new Error(
-        `Withdrawal required ${BI.from(minCapacity).toString()} shannons at least, provided ${BI.from(
-          payload.capacity,
-        ).toString()}.`,
+      const message = `Withdrawal required ${BI.from(minCapacity).toString()} shannons at least, provided ${BI.from(
+        payload.capacity,
+      ).toString()}.`;
+      const error = new NotEnoughCapacityError(
+        { expected: BI.from(minCapacity), actual: BI.from(payload.capacity) },
+        message,
       );
+      eventEmitter.emit("error", error);
+      throw error;
     }
 
     const layer2CkbBalance = await this.getL2CkbBalance();
@@ -366,8 +383,13 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
       const errMsg = `Godwoken CKB balance ${BI.from(layer2CkbBalance).toString()} is less than ${BI.from(
         payload.capacity,
       ).toString()}`;
-      eventEmitter.emit("error", errMsg);
-      throw new Error(errMsg);
+      const error = new NotEnoughCapacityError(
+        { expected: BI.from(payload.capacity), actual: BI.from(layer2CkbBalance) },
+        errMsg,
+      );
+      debugProductionEnv(error);
+      eventEmitter.emit("error", error);
+      throw error;
     }
 
     if (BI.from(payload.amount).gt(0)) {
@@ -377,8 +399,13 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
         const errMsg = `Godwoken Erc20 balance ${BI.from(layer2Erc20Balance).toString()} is less than ${BI.from(
           payload.amount,
         ).toString()}`;
-        eventEmitter.emit("error", errMsg);
-        throw new Error(errMsg);
+        const error = new NotEnoughSudtError(
+          { expected: BI.from(payload.amount), actual: BI.from(layer2Erc20Balance) },
+          errMsg,
+        );
+        debugProductionEnv(error);
+        eventEmitter.emit("error", error);
+        throw error;
       }
     }
 
@@ -458,13 +485,8 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
         data: payload.cell.data,
       });
     }
-    const data =
-      "0x00000000" +
-      new toolkit.Reader(SerializeUnlockWithdrawalViaFinalize(toolkit.normalizers.NormalizeWitnessArgs({})))
-        .serializeJson()
-        .slice(2);
     const newWitnessArgs: WitnessArgs = {
-      lock: data,
+      lock: "0x0000000004000000",
     };
     const withdrawalWitness = new toolkit.Reader(
       core.SerializeWitnessArgs(toolkit.normalizers.NormalizeWitnessArgs(newWitnessArgs)),
@@ -512,14 +534,14 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
     // fee paid for this tx should cost no more than 1000 shannon
     const maxTxFee = BI.from(1000);
     txSkeleton = await this.appendPureCkbCell(txSkeleton, l1Lock, maxTxFee);
-    let signedTx = await this.provider.signL1Transaction(txSkeleton, true);
+    let signedTx = await this.provider.signL1TxSkeleton(txSkeleton, true);
     const txFee = await this.calculateTxFee(signedTx);
     txSkeleton = txSkeleton.update("outputs", (outputs) => {
       const exchagneOutput: Cell = outputs.get(outputs.size - 1)!;
       exchagneOutput.cell_output.capacity = BI.from(exchagneOutput.cell_output.capacity).sub(txFee).toHexString();
       return outputs;
     });
-    signedTx = await this.provider.signL1Transaction(txSkeleton);
+    signedTx = await this.provider.signL1TxSkeleton(txSkeleton);
     const txHash = await this.provider.sendL1Transaction(signedTx);
     return txHash;
   }
@@ -528,18 +550,16 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
     const ownerLock: Script = helpers.parseAddress(this.provider.l1Address);
     const ownerLockHash: Hash = utils.computeScriptHash(ownerLock);
     const layer2Lock: Script = this.provider.getLayer2LockScript();
-
     const depositLockArgs = {
       owner_lock_hash: ownerLockHash,
       layer2_lock: layer2Lock,
-      cancel_timeout: "0xc0000000000004b0",
+      cancel_timeout: BI.from("0xc0000000000004b0"),
+      // cancel_timeout: "0xc000000000000001", // min time to test cancel deposit
     };
     const depositLockArgsHexString: HexString = new toolkit.Reader(
-      SerializeDepositLockArgs(NormalizeDepositLockArgs(depositLockArgs)),
+      V0DepositLockArgs.pack(depositLockArgs),
     ).serializeJson();
-
     const { SCRIPTS, ROLLUP_CONFIG } = this.provider.getLightGodwokenConfig().layer2Config;
-
     const depositLock: Script = {
       code_hash: SCRIPTS.deposit_lock.script_type_hash,
       hash_type: "type",
@@ -547,41 +567,8 @@ export default class DefaultLightGodwokenV0 extends DefaultLightGodwoken impleme
     };
     return depositLock;
   }
-
-  async getRollupCellDep(): Promise<CellDep> {
-    const { layer2Config } = this.provider.getLightGodwokenConfig();
-    const godwokenClient = new GodwokenClient(layer2Config.GW_POLYJUICE_RPC_URL);
-    const result = await godwokenClient.getLastSubmittedInfo();
-    const txHash = result.transaction_hash;
-    const tx = await this.getPendingTransaction(txHash);
-    if (tx == null) {
-      throw new Error("Last submitted tx not found!");
-    }
-    let rollupIndex = tx.transaction.outputs.findIndex((output: Output) => {
-      return output.type && utils.computeScriptHash(output.type) === layer2Config.ROLLUP_CONFIG.rollup_type_hash;
-    });
-    return {
-      out_point: {
-        tx_hash: txHash,
-        index: `0x${rollupIndex.toString(16)}`,
-      },
-      dep_type: "code",
-    };
-  }
-
-  async getPendingTransaction(txHash: Hash): Promise<TransactionWithStatus | null> {
-    let tx: TransactionWithStatus | null = null;
-    // retry 10 times, and sleep 1s
-    for (let i = 0; i < 10; i++) {
-      tx = await this.provider.ckbRpc.get_transaction(txHash);
-      if (tx != null) {
-        return tx;
-      }
-      await this.provider.asyncSleep(1000);
-    }
-    return null;
-  }
 }
+
 function isHexStringEqual(strA: string, strB: string) {
   return strA.toLowerCase() === strB.toLowerCase();
 }

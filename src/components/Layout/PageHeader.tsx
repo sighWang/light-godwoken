@@ -5,6 +5,8 @@ import { ReactComponent as Hamburger } from "../../asserts/hamburger.svg";
 import styled from "styled-components";
 import { Popover } from "antd";
 import { PopoverMenu } from "../PopoverMenu";
+import { VersionSelect } from "../VersionSelect";
+import { isMainnet } from "../../light-godwoken/env";
 const StyledPage = styled.div`
   display: flex;
   align-items: center;
@@ -15,12 +17,14 @@ const StyledPage = styled.div`
   margin-bottom: 24px;
   background: white;
   color: black;
+  .logo-container {
+    width: 182px;
+  }
   .link-list {
     display: flex;
   }
   .right-side {
     display: flex;
-    width: 130px;
     justify-content: end;
     > &:hover {
       cursor: pointer;
@@ -92,7 +96,9 @@ const PageHeader: React.FC<Props> = ({ onViewChange }) => {
 
   return (
     <StyledPage>
-      <Logo height={27}></Logo>
+      <div className="logo-container">
+        <Logo height={27}></Logo>
+      </div>
       <div className="link-list">
         <Link onClick={changeViewToDeposit} className={active === "deposit" ? "active" : ""}>
           Deposit
@@ -102,15 +108,18 @@ const PageHeader: React.FC<Props> = ({ onViewChange }) => {
         </Link>
       </div>
       <div className="right-side">
-        <Popover
-          content={() => <PopoverMenu handleClick={closePopoverMenu}></PopoverMenu>}
-          trigger="click"
-          overlayClassName="popover-menu"
-          visible={popoverVisible}
-          placement="bottomLeft"
-        >
-          <Hamburger className="hamburger-menu" onClick={openPopoverMenu}></Hamburger>
-        </Popover>
+        <VersionSelect></VersionSelect>
+        {!isMainnet && (
+          <Popover
+            content={() => <PopoverMenu handleClick={closePopoverMenu}></PopoverMenu>}
+            trigger="click"
+            overlayClassName="popover-menu"
+            visible={popoverVisible}
+            placement="bottomLeft"
+          >
+            <Hamburger className="hamburger-menu" onClick={openPopoverMenu}></Hamburger>
+          </Popover>
+        )}
       </div>
     </StyledPage>
   );

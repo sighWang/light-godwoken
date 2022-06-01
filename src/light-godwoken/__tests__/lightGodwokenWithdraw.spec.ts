@@ -20,8 +20,8 @@ beforeEach(() => {
   lightGodwokenV1 = new LightGodwokenV1(lightGodwokenProviderV1);
   lightGodwokenProviderV0 = new DefaultLightGodwokenProvider(ethAddress, dummyEthereum, "v0", testConfig.v0);
   lightGodwokenV0 = new LightGodwokenV0(lightGodwokenProviderV0);
-  sinon.stub(lightGodwokenV1.godwokenClient, "getAccountIdByScriptHash").returns(Promise.resolve(9));
-  sinon.stub(lightGodwokenV1.godwokenClient, "getNonce").returns(Promise.resolve(1));
+  sinon.stub(lightGodwokenV1.godwokenClient, "getAccountIdByScriptHash").returns(Promise.resolve("0x9"));
+  sinon.stub(lightGodwokenV1.godwokenClient, "getNonce").returns(Promise.resolve("0x1"));
   sinon.stub(lightGodwokenV1.godwokenClient, "getChainId").returns(Promise.resolve("0x11"));
 
   sinon.stub(lightGodwokenV0.godwokenClient, "getAccountIdByScriptHash").returns(Promise.resolve("0x10"));
@@ -65,7 +65,7 @@ describe("test light godwoken v1 withdrawal", () => {
     } catch (error) {
       errMsg = (error as any).message;
     }
-    expect(errMsg).toEqual("Insufficient CKB balance(199900000000) on Godwoken, required 200000000000");
+    expect(errMsg).toEqual("Godwoken CKB balance 199900000000 is less than 200000000000");
   });
 
   it("should generate RawWithdrawalRequest when withdraw 2000 ckb and 2000 sudt and user balance is 2000 ckb and 2000 sudt", async () => {
@@ -106,9 +106,7 @@ describe("test light godwoken v1 withdrawal", () => {
     } catch (error) {
       errMsg = (error as any).message;
     }
-    expect(errMsg).toEqual(
-      "Insufficient USDC balance(1999000000000000000000) on Godwoken, Required: 2000000000000000000000",
-    );
+    expect(errMsg).toEqual("Godwoken USDC balance 1999000000000000000000 is less than 2000000000000000000000");
   });
 });
 

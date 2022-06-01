@@ -3,7 +3,7 @@ import { LoadingOutlined } from "@ant-design/icons";
 import { BI } from "@ckb-lumos/lumos";
 import { notification } from "antd";
 import styled from "styled-components";
-import { useLightGodwoken, useLightGodwokenVersion } from "../hooks/useLightGodwoken";
+import { useLightGodwoken } from "../hooks/useLightGodwoken";
 import CKBInputPanel from "../components/Input/CKBInputPanel";
 import CurrencyInputPanel from "../components/Input/CurrencyInputPanel";
 import { useSUDTBalance } from "../hooks/useSUDTBalance";
@@ -31,6 +31,10 @@ import { getDepositInputError, isDepositCKBInputValidate, isSudtInputValidate } 
 import { formatToThousands, parseStringToBI } from "../utils/numberFormat";
 import { ReactComponent as CKBIcon } from "../asserts/ckb.svg";
 import { WalletConnect } from "../components/WalletConnect";
+import { DepositList } from "../components/Deposit/List";
+import { NotEnoughCapacityError, NotEnoughSudtError, TransactionSignError } from "../light-godwoken/constants/error";
+import { getFullDisplayAmount } from "../utils/formatTokenAmount";
+import { captureException } from "@sentry/react";
 
 const ModalContent = styled.div`
   width: 100%;
@@ -48,28 +52,55 @@ export default function Deposit() {
   const [selectedSudt, setSelectedSudt] = useState<SUDT>();
   const [selectedSudtBalance, setSelectedSudtBalance] = useState<string>();
   const lightGodwoken = useLightGodwoken();
-  const lightGodwokenVersion = useLightGodwokenVersion();
   const sudtBalanceQUery = useSUDTBalance();
   const CKBBalanceQuery = useL1CKBBalance();
-  const l2CKBBalanceQuery = useL2CKBBalance();
   const CKBBalance = CKBBalanceQuery.data;
   const { data: l2CKBBalance } = useL2CKBBalance();
 
   const maxAmount = CKBBalance ? BI.from(CKBBalance).toString() : undefined;
   const tokenList: SUDT[] | undefined = lightGodwoken?.getBuiltinSUDTList();
   const l1Address = lightGodwoken?.provider.getL1Address();
+  const ethAddress = lightGodwoken?.provider.getL2Address();
   const { data: chainId } = useChainId();
   const { addTxToHistory } = useL1TxHistory(`${chainId}/${l1Address}/deposit`);
 
-  useEffect(() => {
-    CKBBalanceQuery.remove();
-    CKBBalanceQuery.refetch();
-    l2CKBBalanceQuery.remove();
-    l2CKBBalanceQuery.refetch();
-    sudtBalanceQUery.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lightGodwoken, lightGodwokenVersion]);
-
+  const handleError = (e: unknown, selectedSudt?: SUDT) => {
+    console.error(e);
+    if (e instanceof NotEnoughCapacityError) {
+      const expect = formatToThousands(getFullDisplayAmount(BI.from(e.metadata.expected), 8, { maxDecimalPlace: 8 }));
+      const actual = formatToThousands(getFullDisplayAmount(BI.from(e.metadata.actual), 8, { maxDecimalPlace: 8 }));
+      notification.error({
+        message: `You need to get more ckb for deposit, cause there is ${expect} CKB expected but only got ${actual} CKB`,
+      });
+      return;
+    }
+    if (e instanceof NotEnoughSudtError) {
+      const expect = formatToThousands(
+        getFullDisplayAmount(BI.from(e.metadata.expected), selectedSudt?.decimals, {
+          maxDecimalPlace: selectedSudt?.decimals,
+        }),
+      );
+      const actual = formatToThousands(
+        getFullDisplayAmount(BI.from(e.metadata.actual), selectedSudt?.decimals, {
+          maxDecimalPlace: selectedSudt?.decimals,
+        }),
+      );
+      notification.error({
+        message: `You need to get more ${selectedSudt?.symbol} for deposit, cause there is ${expect} ${selectedSudt?.symbol} expected but only got ${actual} ${selectedSudt?.symbol}`,
+      });
+      return;
+    }
+    if (e instanceof TransactionSignError) {
+      notification.error({
+        message: `Sign Transaction Error, please try and confirm sign again`,
+      });
+      return;
+    }
+    captureException(e);
+    notification.error({
+      message: `Unknown Error, Please try again later`,
+    });
+  };
   const showModal = async () => {
     if (lightGodwoken) {
       const capacity = parseStringToBI(CKBInput, 8).toHexString();
@@ -95,17 +126,8 @@ export default function Deposit() {
         });
         notification.success({ message: `deposit Tx(${hash}) is successful` });
       } catch (e) {
-        if (e instanceof Error) {
-          if (e.message.startsWith("Not enough CKB:")) {
-            notification.error({
-              message: e.message,
-            });
-          } else if (e.message.startsWith("Not enough SUDT:")) {
-            notification.error({
-              message: e.message,
-            });
-          }
-        }
+        handleError(e, selectedSudt);
+        setIsModalVisible(false);
       }
       setIsModalVisible(false);
     }
@@ -153,7 +175,12 @@ export default function Deposit() {
               To deposit, transfer CKB or supported sUDT tokens to your L1 Wallet Address first
             </Text>
           </CardHeader>
-          <WalletInfo l1Address={l1Address} l1Balance={CKBBalance} l2Balance={l2CKBBalance}></WalletInfo>
+          <WalletInfo
+            l1Address={l1Address}
+            l1Balance={CKBBalance}
+            l2Balance={l2CKBBalance}
+            ethAddress={ethAddress}
+          ></WalletInfo>
           <CKBInputPanel
             value={CKBInput}
             onUserInput={setCKBInput}
@@ -178,6 +205,9 @@ export default function Deposit() {
             {inputError || "Deposit"}
           </PrimaryButton>
         </div>
+      </Card>
+      <Card>
+        <DepositList></DepositList>
       </Card>
       <ConfirmModal
         title="Confirm Transaction"

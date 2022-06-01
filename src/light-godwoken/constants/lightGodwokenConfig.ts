@@ -27,7 +27,7 @@ const layer1ConfigAggron: Layer1Config = {
   },
   CKB_INDEXER_URL: "https://testnet.ckb.dev/indexer",
   CKB_RPC_URL: "https://testnet.ckb.dev",
-  SCANNER_URL: "https://pudge.explorer.nervos.org/",
+  SCANNER_URL: "https://pudge.explorer.nervos.org",
 };
 
 const v0Config: LightGodwokenConfig = {
@@ -36,12 +36,19 @@ const v0Config: LightGodwokenConfig = {
     SCRIPTS: {
       deposit_lock: {
         script_type_hash: "0x5a2506bb68d81a11dcadad4cb7eae62a17c43c619fe47ac8037bc8ce2dd90360",
+        cell_dep: {
+          out_point: {
+            tx_hash: "0x97614145cdec9ba924001c11cd49f1c424927437b40ed3ca3b82fff358f2e3de",
+            index: "0x0",
+          },
+          dep_type: "code",
+        },
       },
       withdrawal_lock: {
         script_type_hash: "0x170ef156e9f6132dbca6069dfd3e436f7d91c29d3ac7332c4b33e633b6a299b5",
         cell_dep: {
           out_point: {
-            tx_hash: "0xb4b07dcd1571ac18683b515ada40e13b99bd0622197b6817047adc9f407f4828",
+            tx_hash: "0xa8c2fe2aaaf405b2b1fd33dd63adc4c514a3d1f6dd1a64244489ad75c51a5d14",
             index: "0x0",
           },
           dep_type: "code",
@@ -60,12 +67,12 @@ const v0Config: LightGodwokenConfig = {
       },
     },
     GW_POLYJUICE_RPC_URL: "https://godwoken-testnet-web3-rpc.ckbapp.dev",
-    SCANNER_URL: "https://aggron.layerview.io/zh-CN",
+    SCANNER_URL: "https://aggron.gwscan.com",
     CHAIN_NAME: "Godwoken Testnet v0",
   },
 };
 
-export const predefined_v1_1: Record<GodwokenVersion, LightGodwokenConfig> = {
+export const predefined_testnet: Record<GodwokenVersion, LightGodwokenConfig> = {
   v0: v0Config,
   v1: {
     layer1Config: layer1ConfigAggron,
@@ -73,6 +80,58 @@ export const predefined_v1_1: Record<GodwokenVersion, LightGodwokenConfig> = {
       SCRIPTS: {
         deposit_lock: {
           script_type_hash: "0x50704b84ecb4c4b12b43c7acb260ddd69171c21b4c0ba15f3c469b7d143f6f18",
+          cell_dep: {
+            out_point: {
+              tx_hash: "0x9caeec735f3cd2a60b9d12be59bb161f7c61ddab1ac22c4383a94c33ba6404a2",
+              index: "0x0",
+            },
+            dep_type: "code",
+          },
+        },
+        withdrawal_lock: {
+          script_type_hash: "0x06ae0706bb2d7997d66224741d3ec7c173dbb2854a6d2cf97088796b677269c6",
+          cell_dep: {
+            out_point: {
+              tx_hash: "0x9c607a9a75ea4699dd01b1c2a478002343998cac8346d2aa582f35b532bd2b93",
+              index: "0x0",
+            },
+            dep_type: "code",
+          },
+        },
+        eth_account_lock: {
+          script_type_hash: "0x07521d0aa8e66ef441ebc31204d86bb23fc83e9edc58c19dbb1b0ebe64336ec0",
+        },
+      },
+      ROLLUP_CONFIG: {
+        rollup_type_hash: "0x702359ea7f073558921eb50d8c1c77e92f760c8f8656bde4995f26b8963e2dd8",
+        rollup_type_script: {
+          code_hash: "0x1e44736436b406f8e48a30dfbddcf044feb0c9eebfe63b0f81cb5bb727d84854",
+          hash_type: "type",
+          args: "0x86c7429247beba7ddd6e4361bcdfc0510b0b644131e2afb7e486375249a01802",
+        },
+      },
+      GW_POLYJUICE_RPC_URL: "https://godwoken-testnet-v1.ckbapp.dev",
+      SCANNER_URL: "https://v1.betanet.gwscan.com/",
+      CHAIN_NAME: "Godwoken Testnet v1.1",
+    },
+  },
+};
+
+export const predefined_mainnet: Record<GodwokenVersion, LightGodwokenConfig> = {
+  v0: v0Config,
+  v1: {
+    layer1Config: layer1ConfigAggron,
+    layer2Config: {
+      SCRIPTS: {
+        deposit_lock: {
+          script_type_hash: "0x50704b84ecb4c4b12b43c7acb260ddd69171c21b4c0ba15f3c469b7d143f6f18",
+          cell_dep: {
+            out_point: {
+              tx_hash: "0x9caeec735f3cd2a60b9d12be59bb161f7c61ddab1ac22c4383a94c33ba6404a2",
+              index: "0x0",
+            },
+            dep_type: "code",
+          },
         },
         withdrawal_lock: {
           script_type_hash: "0x06ae0706bb2d7997d66224741d3ec7c173dbb2854a6d2cf97088796b677269c6",
@@ -98,7 +157,7 @@ export const predefined_v1_1: Record<GodwokenVersion, LightGodwokenConfig> = {
       },
       GW_POLYJUICE_RPC_URL: "https://godwoken-testnet-v1.ckbapp.dev",
       SCANNER_URL: "https://v1.aggron.gwscan.com/zh-CN",
-      CHAIN_NAME: "Godwoken Testnet v1.1",
+      CHAIN_NAME: "Godwoken Mainet v1.1",
     },
   },
 };

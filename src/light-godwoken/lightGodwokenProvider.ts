@@ -1,4 +1,4 @@
-import { predefined_v1_1 as predefinedLightGodwokenConfig } from "./constants/lightGodwokenConfig";
+import { predefined_testnet, predefined_mainnet } from "./constants/lightGodwokenConfig";
 import {
   Address,
   Indexer,
@@ -22,10 +22,12 @@ import { SUDT_ERC20_PROXY_ABI } from "./constants/sudtErc20ProxyAbi";
 import { AbiItems } from "@polyjuice-provider/base";
 import Web3 from "web3";
 import { GodwokenVersion, LightGodwokenProvider } from "./lightGodwokenType";
-import { SerializeRcLockWitnessLock } from "./omni-lock/index";
 import { debug } from "./debug";
 import { claimUSDC } from "./sudtFaucet";
 import { LightGodwokenConfig } from "./constants/configTypes";
+import { isMainnet } from "./env";
+import { EnvNotFoundError, EthereumNotFoundError, LightGodwokenConfigNotValidError } from "./constants/error";
+import { OmniLockWitnessLockCodec } from "./schemas/codecLayer1";
 
 export default class DefaultLightGodwokenProvider implements LightGodwokenProvider {
   l2Address: Address = "";
@@ -36,6 +38,7 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
   web3;
   lightGodwokenConfig;
   constructor(ethAddress: Address, ethereum: any, env: GodwokenVersion, lightGodwokenConfig?: LightGodwokenConfig) {
+    const predefinedLightGodwokenConfig = isMainnet ? predefined_mainnet : predefined_testnet;
     if (lightGodwokenConfig) {
       validateLightGodwokenConfig(lightGodwokenConfig);
     }
@@ -56,7 +59,7 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     } else if (env === "v1") {
       this.web3 = new Web3(ethereum || (window.ethereum as any));
     } else {
-      throw new Error("unsupported env");
+      throw new EnvNotFoundError(env, "unsupported env");
     }
 
     this.ethereum = ethereum;
@@ -108,7 +111,7 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
 
   static async CreateProvider(ethereum: any, version: GodwokenVersion): Promise<LightGodwokenProvider> {
     if (!ethereum || !ethereum.isMetaMask) {
-      throw new Error("please provide metamask ethereum object");
+      throw new EthereumNotFoundError(ethereum, "please provide metamask ethereum object");
     }
     return ethereum
       .request({ method: "eth_requestAccounts" })
@@ -145,8 +148,7 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     return await this.ckbRpc.send_transaction(tx, "passthrough");
   }
 
-  async signL1Transaction(txSkeleton: helpers.TransactionSkeletonType, dummySign = false): Promise<Transaction> {
-    const message = this.generateMessage(txSkeleton);
+  async signMessage(message: string, dummySign = false): Promise<string> {
     debug("message before sign", message);
     let signedMessage = `0x${"00".repeat(65)}`;
 
@@ -162,43 +164,40 @@ export default class DefaultLightGodwokenProvider implements LightGodwokenProvid
     debug("message after sign", signedMessage);
     const signedWitness = new toolkit.Reader(
       core.SerializeWitnessArgs({
-        lock: SerializeRcLockWitnessLock({
-          signature: new toolkit.Reader(signedMessage),
-        }),
+        lock: OmniLockWitnessLockCodec.pack({ signature: signedMessage }).buffer,
       }),
     ).serializeJson();
-    txSkeleton = txSkeleton.update("witnesses", (witnesses) => witnesses.push(`${signedWitness}`));
+    debug("signedWitness", signedWitness);
+    return signedWitness;
+  }
+
+  async signL1Tx(tx: Transaction, dummySign = false): Promise<Transaction> {
+    const message = this.generateMessageByTransaction(tx);
+    const signedWitness = await this.signMessage(message, dummySign);
+    tx.witnesses.push(signedWitness);
+    return tx;
+  }
+
+  async signL1TxSkeleton(txSkeleton: helpers.TransactionSkeletonType, dummySign = false): Promise<Transaction> {
+    const message = this.generateMessageByTxSkeleton(txSkeleton);
+    const signedWitness = await this.signMessage(message, dummySign);
+    txSkeleton = txSkeleton.update("witnesses", (witnesses) => witnesses.push(signedWitness));
     const signedTx = helpers.createTransactionFromSkeleton(txSkeleton);
-    let inputCapacity = txSkeleton.inputs.reduce(
-      (acc, input) => acc.add(BI.from(input.cell_output.capacity)),
-      BI.from(0),
-    );
-    let outputCapacity = txSkeleton.outputs.reduce(
-      (acc, input) => acc.add(BI.from(input.cell_output.capacity)),
-      BI.from(0),
-    );
-    debug("inputCapacity", inputCapacity.toString());
-    debug("outputCapacity", outputCapacity.toString());
-    debug("payed fee", outputCapacity.sub(inputCapacity).toString());
     return signedTx;
   }
 
-  generateMessage(tx: helpers.TransactionSkeletonType): HexString {
+  generateMessageByTxSkeleton(tx: helpers.TransactionSkeletonType): HexString {
+    const transaction = helpers.createTransactionFromSkeleton(tx);
+    return this.generateMessageByTransaction(transaction);
+  }
+
+  generateMessageByTransaction(transaction: Transaction): HexString {
     const hasher = new utils.CKBHasher();
     const rawTxHash = utils.ckbHash(
-      core.SerializeRawTransaction(
-        toolkit.normalizers.NormalizeRawTransaction(helpers.createTransactionFromSkeleton(tx)),
-      ),
+      core.SerializeRawTransaction(toolkit.normalizers.NormalizeRawTransaction(transaction)),
     );
     const serializedWitness = core.SerializeWitnessArgs({
-      lock: new toolkit.Reader(
-        "0x" +
-          "00".repeat(
-            SerializeRcLockWitnessLock({
-              signature: new toolkit.Reader("0x" + "00".repeat(65)),
-            }).byteLength,
-          ),
-      ),
+      lock: new toolkit.Reader("0x" + "00".repeat(85)),
     });
     hasher.update(rawTxHash);
     this.hashWitness(hasher, serializedWitness);
@@ -296,6 +295,6 @@ function validateLightGodwokenConfig(
     !lightGodwokenConfig.layer1Config.CKB_INDEXER_URL ||
     !lightGodwokenConfig.layer1Config.CKB_RPC_URL
   ) {
-    throw new Error("lightGodwokenConfig not valid.");
+    throw new LightGodwokenConfigNotValidError(JSON.stringify(lightGodwokenConfig), "lightGodwokenConfig not valid.");
   }
 }

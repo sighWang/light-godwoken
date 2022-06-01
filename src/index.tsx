@@ -10,18 +10,33 @@ import { config } from "@ckb-lumos/lumos";
 
 import * as Sentry from "@sentry/react";
 import { BrowserTracing } from "@sentry/tracing";
-Sentry.init({
-  environment: process.env.NODE_ENV,
-  release: "light-godwoken@" + process.env.REACT_APP_VERSION,
-  debug: false,
-  dsn: process.env.REACT_APP_SENTRY_DSN,
-  integrations: [new BrowserTracing()],
+import { LightGodwokenError } from "./light-godwoken/constants/error";
+if (process.env.NODE_ENV === "production") {
+  Sentry.init({
+    environment: process.env.NODE_ENV,
+    release: "light-godwoken@" + process.env.REACT_APP_VERSION,
+    debug: false,
+    dsn: process.env.REACT_APP_SENTRY_DSN,
+    integrations: [new BrowserTracing()],
 
-  // Set tracesSampleRate to 1.0 to capture 100%
-  // of transactions for performance monitoring.
-  // We recommend adjusting this value in production
-  tracesSampleRate: 1.0,
-});
+    // Set tracesSampleRate to 1.0 to capture 100%
+    // of transactions for performance monitoring.
+    // We recommend adjusting this value in production
+    tracesSampleRate: 1.0,
+    allowUrls: [
+      /https?:\/\/testnet\.bridge\.godwoken\.io/,
+      /https?:\/\/light-godwoken\.vercel\.app/,
+      /https?:\/\/light-godwoken-mainnet\.vercel\.app/,
+    ],
+    beforeSend: function (event, hint) {
+      const exception = hint?.originalException;
+      if (exception instanceof LightGodwokenError) {
+        event.fingerprint = ["light-godwoken-error"];
+      }
+      return event;
+    },
+  });
+}
 
 config.initializeConfig(config.predefined.AGGRON4);
 

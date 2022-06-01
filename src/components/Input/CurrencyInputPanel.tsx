@@ -3,12 +3,13 @@ import { List } from "antd";
 import { FixedHeightRow } from "../Withdrawal/WithdrawalRequestCard";
 import NumericalInput from "./NumericalInput";
 import { DownOutlined, LoadingOutlined } from "@ant-design/icons";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { getFullDisplayAmount } from "../../utils/formatTokenAmount";
 import { Token } from "../../light-godwoken/lightGodwokenType";
 import { BI } from "@ckb-lumos/lumos";
 import { ConfirmModal, InputCard, Row, Text } from "../../style/common";
 import { formatToThousands } from "../../utils/numberFormat";
+import { useLightGodwoken } from "../../hooks/useLightGodwoken";
 
 const TokenList = styled.div`
   height: 390px;
@@ -60,6 +61,9 @@ const CurrencyWrapper = styled.div`
   .select {
     padding-left: 5px;
   }
+  &:hover {
+    cursor: pointer;
+  }
 `;
 interface CurrencyInputPanelProps {
   value: string;
@@ -81,12 +85,19 @@ export default function CurrencyInputPanel({
   dataLoading,
   onSelectedChange,
 }: CurrencyInputPanelProps) {
+  const lightGodwoken = useLightGodwoken();
   const [selectedCurrencyBalance, setCurrencyBalance] = useState<string>();
   const [selectedCurrency, setSelectedCurrency] = useState<Token>();
   const [disableInput, setDisableInput] = useState<boolean>(true);
 
   const [isModalVisible, setIsModalVisible] = useState(false);
 
+  useEffect(() => {
+    setCurrencyBalance(undefined);
+    setSelectedCurrency(undefined);
+    setDisableInput(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightGodwoken?.getVersion(), lightGodwoken?.provider.getL2Address()]);
   const handleOk = () => {
     setIsModalVisible(false);
   };
@@ -181,9 +192,10 @@ export default function CurrencyInputPanel({
                   <div>
                     {dataLoading ? (
                       <LoadingOutlined />
-                    ) : (
-                      balancesList &&
+                    ) : balancesList && balancesList[index] && balancesList[index] !== "0x0" ? (
                       formatToThousands(getFullDisplayAmount(BI.from(balancesList[index]), erc20.decimals))
+                    ) : (
+                      "-"
                     )}
                   </div>
                 </FixedHeightRow>
